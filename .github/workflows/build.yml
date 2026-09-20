@@ -1,0 +1,254 @@
+name: Auto Build sing-box (with_v2ray_api, multi-version)
+
+# 打包方案参照 qist/caddy-binaries 与 qist/nginx-binaries：
+#   resolve(多版本 + 生成 matrix) → build(版本 × 平台 矩阵 + 校验) → release(每个版本一个 Release)
+#
+# 与官方 release 的唯一差异：在 release/DEFAULT_BUILD_TAGS_OTHERS 基础上追加 with_v2ray_api。
+# 官方 release 一律不含该 tag，配置里出现 experimental.v2ray_api 时会直接 FATAL：
+#   create v2ray-server: v2ray api is not included in this build, rebuild with -tags with_v2ray_api
+# 而 v2ray_api 是 CoreFusion 按订阅用户统计流量的唯一可用通道（clash_api 无 user 维度）。
+
+on:
+  schedule:
+    - cron: '0 1 * * *'   # 每天 01:00 UTC 检查上游新版本（自动补齐最近 N 个未构建版本）
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: '显式版本列表（逗号分隔，如 v1.14.0,v1.13.0）；留空=自动取最近 N 个'
+        required: false
+        default: ''
+      version_count:
+        description: '自动模式：取上游最近 N 个 release'
+        required: false
+        default: '3'
+      include_prerelease:
+        description: '自动模式：是否包含预发布版本（alpha/beta/rc）'
+        required: false
+        type: boolean
+        default: true
+      tag_suffix:
+        description: '发布 tag 后缀（默认 -cf.1；填 __none__ 表示与上游 tag 完全一致）'
+        required: false
+        default: '-cf.1'
+      extra_tags:
+        description: '追加的 build tags（填 __none__ 表示只用官方 tag 集）'
+        required: false
+        default: 'with_v2ray_api'
+      force_build:
+        description: '已发布的版本也强制重新构建'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # resolve: 解析要构建的版本列表，生成 build / release matrix
+  # ---------------------------------------------------------------------------
+  resolve:
+    name: Resolve versions & matrix
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.resolve.outputs.should_build }}
+      versions: ${{ steps.resolve.outputs.versions }}
+      extra_tags: ${{ steps.resolve.outputs.extra_tags }}
+      build_matrix: ${{ steps.resolve.outputs.build_matrix }}
+      release_matrix: ${{ steps.resolve.outputs.release_matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve versions and build matrix
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSIONS: ${{ inputs.versions }}
+          VERSION_COUNT: ${{ inputs.version_count }}
+          INCLUDE_PRERELEASE: ${{ inputs.include_prerelease }}
+          TAG_SUFFIX: ${{ inputs.tag_suffix }}
+          EXTRA_TAGS: ${{ inputs.extra_tags }}
+          FORCE_BUILD: ${{ inputs.force_build }}
+          SELF_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash scripts/resolve-versions.sh >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          {
+            echo "### sing-box 打包任务"
+            echo ""
+            echo "- 待构建版本: \`${{ steps.resolve.outputs.versions }}\`"
+            echo "- 追加 tags: \`${{ steps.resolve.outputs.extra_tags }}\`"
+            echo "- 任务数: $(echo '${{ steps.resolve.outputs.build_matrix }}' | jq 'length')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # build: 版本 × 平台 矩阵编译 + 校验 + 打包
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.version }} ${{ matrix.suffix }}
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.build_matrix) }}
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+
+      - name: Clone sing-box ${{ matrix.version }}
+        env:
+          UPSTREAM_TAG: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${UPSTREAM_TAG}" \
+            https://github.com/SagerNet/sing-box.git src
+          echo "源码 commit: $(git -C src rev-parse HEAD)"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+
+      - name: Build
+        env:
+          UPSTREAM_TAG: ${{ matrix.version }}
+          ASSET_VERSION: ${{ matrix.asset_version }}
+          EXTRA_TAGS: ${{ needs.resolve.outputs.extra_tags }}
+        run: |
+          set -euo pipefail
+          UPSTREAM_COMMIT="$(git -C src rev-parse HEAD)"
+          export UPSTREAM_COMMIT
+          bash scripts/build.sh \
+            src \
+            "${{ matrix.goos }}" \
+            "${{ matrix.goarch }}" \
+            "${{ matrix.goarm }}" \
+            "dist/sing-box${{ matrix.ext }}" \
+            "${ASSET_VERSION}" \
+            "${EXTRA_TAGS}"
+
+      - name: Verify binary
+        env:
+          ASSET_VERSION: ${{ matrix.asset_version }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify.sh "dist/sing-box${{ matrix.ext }}" "${ASSET_VERSION}"
+
+      - name: Package
+        env:
+          ASSET_VERSION: ${{ matrix.asset_version }}
+        run: |
+          set -euo pipefail
+          bash scripts/package.sh \
+            dist \
+            "dist/sing-box${{ matrix.ext }}" \
+            "${ASSET_VERSION}" \
+            "${{ matrix.suffix }}" \
+            "${{ matrix.fmt }}" \
+            src
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-${{ matrix.asset_version }}-${{ matrix.suffix }}
+          path: dist/sing-box-${{ matrix.asset_version }}-${{ matrix.suffix }}.*
+          retention-days: 3
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # release: 每个版本独立创建一个 Release
+  # ---------------------------------------------------------------------------
+  release:
+    name: Release ${{ matrix.release_tag }}
+    needs: [resolve, build]
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.release_matrix) }}
+    steps:
+      - name: Download artifacts for ${{ matrix.asset_version }}
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: sing-box-${{ matrix.asset_version }}-*
+
+      - name: Collect files and generate checksums
+        env:
+          ASSET_VERSION: ${{ matrix.asset_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -maxdepth 2 -type f -exec cp {} release/ \;
+          cd release
+          sha256sum ./* > "sing-box_${ASSET_VERSION}_checksums.txt"
+          ls -lh
+
+      - name: Resolve upstream commit
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          SHA="$(gh api "repos/SagerNet/sing-box/commits/${UPSTREAM_TAG}" --jq .sha || echo unknown)"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "上游 ${UPSTREAM_TAG} commit: ${SHA}"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.release_tag }}
+          name: sing-box ${{ matrix.release_tag }} (custom build, ${{ needs.resolve.outputs.extra_tags }})
+          prerelease: ${{ matrix.is_prerelease == 'true' }}
+          make_latest: ${{ matrix.is_prerelease != 'true' }}
+          files: release/*
+          body: |
+            **第三方自定义构建（非官方发布）** — 基于上游 sing-box `${{ matrix.version }}`，仅编译参数不同。
+
+            ## 与官方 release 的差异
+
+            | 项 | 官方 release | 本构建 |
+            |---|---|---|
+            | build tags | `release/DEFAULT_BUILD_TAGS_OTHERS` | 同上，**追加 `${{ needs.resolve.outputs.extra_tags }}`** |
+            | 源码修改 | 无 | **未修改任何源码**（commit `${{ steps.upstream.outputs.sha }}`） |
+
+            > 官方 release 不含 `with_v2ray_api`，配置中出现 `experimental.v2ray_api` 时会直接 FATAL：
+            > `create v2ray-server: v2ray api is not included in this build, rebuild with -tags with_v2ray_api`。
+            > 本构建补上该 tag，使面板可按订阅用户统计流量（V2Ray StatsService，与 xray stats 协议兼容）。
+
+            ## 产物（命名与官方一致，面板无需改动）
+
+            ```
+            sing-box-${{ matrix.asset_version }}-<os>-<arch>.tar.gz   # Linux / macOS / FreeBSD
+            sing-box-${{ matrix.asset_version }}-<os>-<arch>.zip      # Windows
+            ```
+
+            归档内容：`sing-box`（二进制）、`LICENSE`、`BUILD-INFO.txt`（上游 commit + tags + 完整编译命令）。
+
+            ## 校验方式
+
+            ```bash
+            strings -a sing-box | grep -c "v2ray api is not included in this build"    # 期望 0
+            strings -a sing-box | grep -c "v2ray.core.app.stats.command.StatsService"  # 期望 >= 1
+            ./sing-box check -c config-with-v2ray-api.json                            # 期望通过
+            ```
+
+            ## 校验和
+
+            见 `sing-box_${{ matrix.asset_version }}_checksums.txt`。
+
+            ## 许可与合规
+
+            本产物由 GPL-3.0-or-later 许可的 sing-box 源码编译，**未修改上游源码**；对应源码即
+            [SagerNet/sing-box@${{ matrix.version }}](https://github.com/SagerNet/sing-box/tree/${{ matrix.version }})（commit `${{ steps.upstream.outputs.sha }}`），
+            可按归档内 `BUILD-INFO.txt` 的编译命令复现，以履行 GPLv3 关于提供对应源码的要求。
+            再分发时请随附 `LICENSE`。本构建为第三方非官方产物，与 SagerNet / sing-box 项目无隶属或背书关系；
+            按上游 LICENSE 附加条款，不得以 `sing-box` 名义暗示官方关联。

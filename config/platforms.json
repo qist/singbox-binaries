@@ -1,0 +1,11 @@
+[
+  { "suffix": "linux-amd64",   "goos": "linux",   "goarch": "amd64", "goarm": "",  "ext": "",     "fmt": "tar.gz" },
+  { "suffix": "linux-arm64",   "goos": "linux",   "goarch": "arm64", "goarm": "",  "ext": "",     "fmt": "tar.gz" },
+  { "suffix": "linux-armv7",   "goos": "linux",   "goarch": "arm",   "goarm": "7", "ext": "",     "fmt": "tar.gz" },
+  { "suffix": "linux-386",     "goos": "linux",   "goarch": "386",   "goarm": "",  "ext": "",     "fmt": "tar.gz" },
+  { "suffix": "darwin-amd64",  "goos": "darwin",  "goarch": "amd64", "goarm": "",  "ext": "",     "fmt": "tar.gz" },
+  { "suffix": "darwin-arm64",  "goos": "darwin",  "goarch": "arm64", "goarm": "",  "ext": "",     "fmt": "tar.gz" },
+  { "suffix": "freebsd-amd64", "goos": "freebsd", "goarch": "amd64", "goarm": "",  "ext": "",     "fmt": "tar.gz" },
+  { "suffix": "windows-amd64", "goos": "windows", "goarch": "amd64", "goarm": "",  "ext": ".exe", "fmt": "zip" },
+  { "suffix": "windows-arm64", "goos": "windows", "goarch": "arm64", "goarm": "",  "ext": ".exe", "fmt": "zip" }
+]

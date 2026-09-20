@@ -1,0 +1,19 @@
+# 构建/源码缓存（CI 与本地构建）
+/src/
+/work/
+/libs/
+/dist/
+/artifacts/
+/release/
+
+# 构建产物
+*.tar.gz
+*.zip
+*.sha256
+sing-box
+sing-box.exe
+
+# 编辑器/系统
+.DS_Store
+.idea/
+.vscode/
