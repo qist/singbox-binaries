@@ -27,6 +27,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 VERSIONS="${VERSIONS:-}"
 VERSION_COUNT="${VERSION_COUNT:-3}"
+# 数值兜底（输入可能是空串或非数字）
+case "$VERSION_COUNT" in
+  ''|*[!0-9]*) VERSION_COUNT=3 ;;
+esac
+if [ "$VERSION_COUNT" -lt 1 ]; then VERSION_COUNT=1; fi
 INCLUDE_PRERELEASE="${INCLUDE_PRERELEASE:-true}"
 TAG_SUFFIX="${TAG_SUFFIX:--cf.1}"
 FORCE_BUILD="${FORCE_BUILD:-false}"
@@ -67,12 +72,19 @@ else
     JSON="$(gh release list --repo "$UPSTREAM_REPO" --limit 50 --json tagName,isPrerelease)"
   fi
   if [ "$INCLUDE_PRERELEASE" = "true" ]; then
-    FILTER='.[].tagName'
+    # 默认策略：最近 (N-1) 个（不限预发布）+ 最新 1 个正式版。
+    # 原因：上游连续发 alpha 时，若纯按时间取 N 个会永远取不到正式版，
+    #       而面板需要"最新尝鲜 + 稳定可用"两类版本。
+    HEAD_N="$VERSION_COUNT"
+    if [ "$VERSION_COUNT" -ge 2 ]; then HEAD_N=$((VERSION_COUNT - 1)); fi
+    PART1="$(echo "$JSON" | jq -r '.[].tagName' | head -n "$HEAD_N")"
+    PART2="$(echo "$JSON" | jq -r '.[] | select(.isPrerelease == false) | .tagName' | head -n 1)"
+    CANDIDATES="$(printf '%s\n%s\n' "$PART1" "$PART2" | awk 'NF && !seen[$0]++' | head -n "$VERSION_COUNT" | tr '\n' ' ' | tr -s ' ')"
+    log "自动选择（最近 $HEAD_N 个 + 最新正式版）: $CANDIDATES"
   else
-    FILTER='.[] | select(.isPrerelease == false) | .tagName'
+    CANDIDATES="$(echo "$JSON" | jq -r '.[] | select(.isPrerelease == false) | .tagName' | head -n "$VERSION_COUNT" | tr '\n' ' ' | tr -s ' ')"
+    log "自动选择最近 $VERSION_COUNT 个正式版: $CANDIDATES"
   fi
-  CANDIDATES="$(echo "$JSON" | jq -r "$FILTER" | head -n "$VERSION_COUNT" | tr '\n' ' ' | tr -s ' ')"
-  log "自动选择最近 $VERSION_COUNT 个版本（含预发布=$INCLUDE_PRERELEASE）: $CANDIDATES"
 fi
 
 CANDIDATES="$(printf '%s' "$CANDIDATES" | xargs || true)"
