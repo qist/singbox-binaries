@@ -29,6 +29,11 @@ SRC="${6:?缺少 src_dir}"
 
 [ -f "$BIN" ] || { echo "ERROR: 找不到二进制 $BIN" >&2; exit 1; }
 
+# ROOT 绝对化：下面会 cd 到临时暂存目录，若 ROOT 是相对路径（CI 传的是 "dist"）
+# 归档就会写到 <暂存目录>/dist 而失败（tar: Cannot open: No such file or directory）。
+mkdir -p "$ROOT"
+ROOT="$(cd "$ROOT" && pwd)"
+
 STAGE="$(mktemp -d)"
 OUT_DIR="$STAGE/sing-box"
 mkdir -p "$OUT_DIR"
@@ -63,6 +68,8 @@ mkdir -p "$ROOT"
   fi
 )
 rm -rf "$STAGE"
+
+[ -f "$ROOT/$ASSET" ] || { echo "ERROR: 归档未生成: $ROOT/$ASSET" >&2; exit 1; }
 
 echo "==> [package] 产物: $ROOT/$ASSET"
 if command -v tar >/dev/null 2>&1 && [ "$FMT" = "tar.gz" ]; then
