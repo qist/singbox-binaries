@@ -54,8 +54,8 @@ emit_empty() {
   echo "should_build=false"
   echo "versions="
   echo "extra_tags=${EXTRA_TAGS}"
-  echo "build_matrix=[]"
-  echo "release_matrix=[]"
+  echo 'build_matrix={"include":[]}'
+  echo 'release_matrix={"include":[]}'
 }
 
 # ---------------------------------------------------------------------------
@@ -125,26 +125,32 @@ fi
 VS_JSON="$(printf '%s\n' $PENDING | jq -R . | jq -sc .)"
 
 BUILD_MATRIX="$(jq -cn --argjson p "$(cat "$PLATFORMS_FILE")" --argjson vs "$VS_JSON" --arg suffix "$TAG_SUFFIX" '
-  [ $p[] as $pl | $vs[] as $v
-    | ($v + $suffix) as $t
-    | $pl + {
-        version: $v,
-        release_tag: $t,
-        asset_version: ($t | ltrimstr("v"))
-      } ]')"
+  { include: [ $p[] as $pl | $vs[] as $v
+      | ($v + $suffix) as $t
+      | $pl + {
+          version: $v,
+          release_tag: $t,
+          asset_version: ($t | ltrimstr("v"))
+        } ] }')"
 
 RELEASE_MATRIX="$(jq -cn --argjson vs "$VS_JSON" --arg suffix "$TAG_SUFFIX" '
-  [ $vs[] as $v
-    | ($v + $suffix) as $t
-    | { version: $v,
-        release_tag: $t,
-        asset_version: ($t | ltrimstr("v")),
-        is_prerelease: (if ($t | test("-alpha|-beta|-rc|-dev")) then "true" else "false" end) } ]')"
+  { include: [ $vs[] as $v
+      | ($v + $suffix) as $t
+      | { version: $v,
+          release_tag: $t,
+          asset_version: ($t | ltrimstr("v")),
+          is_prerelease: (if ($t | test("-alpha|-beta|-rc|-dev")) then "true" else "false" end) } ] }')"
 
 PLATFORM_COUNT="$(jq 'length' "$PLATFORMS_FILE")"
 VERSION_COUNT_FINAL="$(printf '%s\n' $PENDING | wc -w | tr -d ' ')"
 log "待构建版本: $PENDING"
 log "任务数: ${VERSION_COUNT_FINAL} 版本 × ${PLATFORM_COUNT} 平台 = $((VERSION_COUNT_FINAL * PLATFORM_COUNT)) 个 job"
+
+# matrix 形状自检：GitHub 的 strategy.matrix 必须是对象（用 include 承载），裸数组会导致 job 无法创建
+echo "$BUILD_MATRIX" | jq -e '.include | length > 0' >/dev/null \
+  || { echo "ERROR: build_matrix 形状非法: $BUILD_MATRIX" >&2; exit 1; }
+echo "$RELEASE_MATRIX" | jq -e '.include | length > 0' >/dev/null \
+  || { echo "ERROR: release_matrix 形状非法: $RELEASE_MATRIX" >&2; exit 1; }
 
 echo "should_build=true"
 echo "versions=${PENDING}"

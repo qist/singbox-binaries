@@ -76,14 +76,19 @@ jobs:
           bash scripts/resolve-versions.sh >> "$GITHUB_OUTPUT"
 
       - name: Summary
+        env:
+          VERSIONS: ${{ steps.resolve.outputs.versions }}
+          EXTRA_TAGS: ${{ steps.resolve.outputs.extra_tags }}
+          BUILD_MATRIX: ${{ steps.resolve.outputs.build_matrix }}
         run: |
           set -euo pipefail
+          JOBS="$(printf '%s' "$BUILD_MATRIX" | jq '.include | length')"
           {
             echo "### sing-box 打包任务"
             echo ""
-            echo "- 待构建版本: \`${{ steps.resolve.outputs.versions }}\`"
-            echo "- 追加 tags: \`${{ steps.resolve.outputs.extra_tags }}\`"
-            echo "- 任务数: $(echo '${{ steps.resolve.outputs.build_matrix }}' | jq 'length')"
+            echo "- 待构建版本: \`${VERSIONS}\`"
+            echo "- 追加 tags: \`${EXTRA_TAGS}\`"
+            echo "- 任务数: ${JOBS}（版本 × 平台）"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
